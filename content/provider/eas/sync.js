@@ -654,6 +654,7 @@ eas.sync = {
         let wbxml = tbSync.wbxmltools.createWBXML("", syncdata.type); //init wbxml with "" and not with precodes, also activate type codePage (Calendar, Tasks etc)
 
         if (item.recurrenceInfo) {
+            let added = [];
             let deleted = [];
             let hasRecurrence = false;
             
@@ -661,11 +662,11 @@ eas.sync = {
                 if (recRule.date) {
                     if (recRule.isNegative) {
                         // EXDATE
-                        deleted.push(recRule);
+                        deleted.push(recRule.date);
                     }
                     else {
                         // RDATE
-                        tbSync.dump("Ignoring RDATE rule", recRule.icalString);
+                        added.push(recRule.date);
                     }
                     continue;
                 }
@@ -775,23 +776,33 @@ eas.sync = {
             
             if (syncdata.type == "Calendar" && hasRecurrence) { //Exceptions only allowed in Calendar and only if a valid Recurrence was added
                 let modifiedIds = item.recurrenceInfo.getExceptionIds({});
-                if (deleted.length || modifiedIds.length) {
-                    wbxml.otag("Exceptions");
-                    for (let exception of deleted) {
-                        wbxml.otag("Exception");
-                            wbxml.atag("ExceptionStartTime", tbSync.getIsoUtcString(exception.date));
-                            wbxml.atag("Deleted", "1");
-                            //Docs say it is allowed, but if present, it does not work
-                            //if (asversion == "2.5") {
-                            //    wbxml.atag("UID", item.id);
-                            //}
-                        wbxml.ctag();
+                let modified = [];
+                let workaround = true;
+                // Exchange workaround: delete then re-add moved exceptions
+                for (let exDate of modifiedIds) {
+                    let replacement = item.recurrenceInfo.getExceptionFor(exDate);
+                    if (workaround && replacement.startDate != exDate) {
+                        deleted.push(exDate);
+                        added.push(replacement.startDate);
                     }
-                    for (let exceptionId of modifiedIds) {
-                        let replacement = item.recurrenceInfo.getExceptionFor(exceptionId);
+                    else {
+                        modified.push(exDate);
+                    }
+                }
+                let total = [].concat(added, deleted, modified);
+                total.sort(function(a, b) {
+                    return a.compare(b);
+                });
+                if (total.length) {
+                    wbxml.otag("Exceptions");
+                    for (let exDate of total) {
                         wbxml.otag("Exception");
-                            wbxml.atag("ExceptionStartTime", tbSync.getIsoUtcString(exceptionId));
-                            wbxml.append(eas.sync.Calendar.getWbxmlFromThunderbirdItem(replacement, syncdata, true));
+                            wbxml.atag("Deleted", deleted.includes(exDate) ? "1" : "0");
+                            wbxml.atag("ExceptionStartTime", tbSync.getIsoUtcString(exDate));
+                            if (modified.includes(exDate)) {
+                                let replacement = item.recurrenceInfo.getExceptionFor(exDate);
+                                wbxml.append(eas.sync.Calendar.getWbxmlFromThunderbirdItem(replacement, syncdata, true));
+                            }
                         wbxml.ctag();
                     }
                     wbxml.ctag();
